@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>圖片倒影產生器 (Reflection Maker)</title>
+    <style>
+        :root {
+            --primary-color: #4a90e2;
+            --background-color: #f8f9fa;
+        }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #e9ecef; color: #333; max-width: 900px; margin: 0 auto; padding: 20px; }
+        .container { background: #fff; padding: 25px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); }
+        h2 { border-left: 5px solid var(--primary-color); padding-left: 15px; color: #2c3e50; margin-top: 0; }
+        
+        .controls { background: var(--background-color); padding: 15px; border-radius: 8px; margin-bottom: 20px; display: flex; gap: 15px; flex-wrap: wrap; align-items: center; }
+        
+        select, input[type="file"] { padding: 8px; border: 1px solid #ccc; border-radius: 5px; background: #fff; font-size: 14px; }
+        
+        button { background: #2ecc71; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; transition: background 0.2s; font-weight: bold; margin-left: auto; }
+        button:hover { background: #27ae60; }
+        button:disabled { background: #bdc3c7; cursor: not-allowed; }
+
+        /* 透明網格背景：方便使用者看出漸層與透明度的變化 */
+        .canvas-container {
+            text-align: center;
+            background-color: #fff;
+            padding: 20px;
+            border-radius: 8px;
+            border: 1px solid #eee;
+        }
+        canvas { 
+            max-width: 100%; 
+            border-radius: 4px; 
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1); 
+            background-image: 
+                linear-gradient(45deg, #e0e0e0 25%, transparent 25%), 
+                linear-gradient(135deg, #e0e0e0 25%, transparent 25%), 
+                linear-gradient(45deg, transparent 75%, #e0e0e0 75%), 
+                linear-gradient(135deg, transparent 75%, #e0e0e0 75%); 
+            background-size: 20px 20px; 
+            background-position: 0 0, 10px 0, 10px -10px, 0px 10px; 
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>圖片倒影產生器 (Reflection Maker)</h2>
+        <p>上傳圖片並選擇喜歡的倒影樣式。系統會自動套用漸層、模糊或水波紋等演算法，增加圖片的立體感與質感。</p>
+        
+        <div class="controls">
+            <input type="file" id="reflect-img" accept="image/*">
+            
+            <label>倒影樣式：
+                <select id="reflect-style">
+                    <option value="classic">1. 標準漸層 (Classic)</option>
+                    <option value="mirror">2. 清晰鏡面 (Glass Mirror)</option>
+                    <option value="frosted">3. 模糊玻璃 (Frosted Glass)</option>
+                    <option value="dark">4. 深色水面 (Dark Water)</option>
+                    <option value="ripple">5. 波浪水紋 (Water Ripples)</option>
+                </select>
+            </label>
+
+            <button id="btn-download" disabled>⬇️ 下載圖片</button>
+        </div>
+        
+        <div class="canvas-container">
+            <canvas id="reflect-canvas"></canvas>
+        </div>
+    </div>
+
+    <script>
+        const refCanvas = document.getElementById('reflect-canvas');
+        const refCtx = refCanvas.getContext('2d');
+        const styleSelect = document.getElementById('reflect-style');
+        const btnDownload = document.getElementById('btn-download');
+        
+        let currentImg = null; // 儲存當前圖片，以便切換樣式時可以立刻重繪
+
+        // 1. 上傳圖片
+        document.getElementById('reflect-img').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                const img = new Image();
+                img.onload = () => {
+                    currentImg = img;
+                    generateReflection();
+                    btnDownload.disabled = false;
+                };
+                img.src = event.target.result;
+            };
+            reader.readAsDataURL(file);
+        });
+
+        // 2. 切換樣式即時預覽
+        styleSelect.addEventListener('change', () => {
+            if (currentImg) generateReflection();
+        });
+
+        // 3. 下載圖片功能
+        btnDownload.addEventListener('click', () => {
+            if (!currentImg) return;
+            const link = document.createElement('a');
+            link.download = 'reflection-image.png';
+            link.href = refCanvas.toDataURL('image/png');
+            link.click();
+        });
+
+        // 核心：繪製倒影
+        function generateReflection() {
+            const style = styleSelect.value;
+            const img = currentImg;
+
+            // 限制最大寬度以防效能卡頓或記憶體溢出
+            let maxW = 800; 
+            let scale = img.width > maxW ? maxW / img.width : 1;
+            let w = img.width * scale;
+            let h = img.height * scale;
+            
+            // 定義各個樣式的參數
+            let heightRatio = 0.6;   // 倒影佔原圖高度的比例
+            let startAlpha = 0.6;    // 交界處的起始透明度 (0~1)
+            let endAlpha = 0;        // 底部結束透明度
+            let filterString = 'none'; // Canvas 的 CSS filter 濾鏡
+            let isRipple = false;    // 是否啟用波浪演算法
+
+            switch (style) {
+                case 'classic':
+                    heightRatio = 0.6; startAlpha = 0.6; endAlpha = 0;
+                    break;
+                case 'mirror':
+                    heightRatio = 0.85; startAlpha = 0.9; endAlpha = 0.2;
+                    break;
+                case 'frosted':
+                    heightRatio = 0.6; startAlpha = 0.8; endAlpha = 0;
+                    filterString = 'blur(6px)';
+                    break;
+                case 'dark':
+                    heightRatio = 0.45; startAlpha = 0.4; endAlpha = 0;
+                    filterString = 'brightness(0.3) contrast(1.2)';
+                    break;
+                case 'ripple':
+                    heightRatio = 0.6; startAlpha = 0.7; endAlpha = 0;
+                    isRipple = true;
+                    break;
+            }
+
+            let refHeight = Math.floor(h * heightRatio);
+
+            // 設定最終輸出的 Canvas 大小
+            refCanvas.width = w;
+            refCanvas.height = h + refHeight;
+
+            // 步驟A：繪製上半部的原圖
+            refCtx.clearRect(0, 0, refCanvas.width, refCanvas.height);
+            refCtx.drawImage(img, 0, 0, w, h);
+
+            // 步驟B：建立暫存 Canvas 處理下半部倒影
+            const tempCanvas = document.createElement('canvas');
+            tempCanvas.width = w;
+            tempCanvas.height = refHeight;
+            const tempCtx = tempCanvas.getContext('2d');
+
+            if (isRipple) {
+                // 【波紋處理】：先將圖片翻轉畫入 srcCanvas
+                const srcCanvas = document.createElement('canvas');
+                srcCanvas.width = w;
+                srcCanvas.height = refHeight;
+                const srcCtx = srcCanvas.getContext('2d');
+                srcCtx.translate(0, h);
+                srcCtx.scale(1, -1);
+                srcCtx.drawImage(img, 0, 0, w, h);
+
+                // 利用 Sine Wave (正弦波) 逐行繪製像素，產生扭曲感
+                for (let y = 0; y < refHeight; y++) {
+                    // 波長頻率
+                    let freq = 0.15;
+                    // 振幅：讓水波紋越往下（遠方）扭曲越大，且起點處振幅為0確保與原圖無縫接軌
+                    let amp = (y / refHeight) * 10; 
+                    let offsetX = Math.sin(y * freq) * amp;
+                    
+                    // 擷取原本的 1px 高度，平移 offsetX 後畫入 tempCanvas
+                    tempCtx.drawImage(srcCanvas, 0, y, w, 1, offsetX, y, w, 1);
+                }
+            } else {
+                // 【常規處理】：套用對應的濾鏡，直接垂直翻轉
+                tempCtx.filter = filterString;
+                tempCtx.translate(0, h);
+                tempCtx.scale(1, -1);
+                tempCtx.drawImage(img, 0, 0, w, h);
+                
+                // 畫完後重置變換與濾鏡，以免影響後續的漸層遮罩
+                tempCtx.setTransform(1, 0, 0, 1, 0, 0); 
+                tempCtx.filter = 'none';
+            }
+
+            // 步驟C：疊加透明漸層遮罩 (Alpha Mask)
+            // destination-in: 僅保留與漸層重疊的圖像區域，漸層透明度將套用到原圖上
+            tempCtx.globalCompositeOperation = 'destination-in';
+            const gradient = tempCtx.createLinearGradient(0, 0, 0, refHeight);
+            gradient.addColorStop(0, `rgba(0, 0, 0, ${startAlpha})`);
+            gradient.addColorStop(1, `rgba(0, 0, 0, ${endAlpha})`);
+            
+            tempCtx.fillStyle = gradient;
+            tempCtx.fillRect(0, 0, w, refHeight);
+
+            // 步驟D：將完成處理的倒影畫回主要 Canvas 的下方
+            refCtx.drawImage(tempCanvas, 0, h);
+        }
+    </script>
+</body>
+</html>
